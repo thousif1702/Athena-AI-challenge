@@ -40,7 +40,7 @@ python server.py
 ## Connect to Athena
 1. Create an agent at Athena Platform
 2. Paste the MCP URL.
-3. Use the system prompt
+3. Use the agent_prompt.md
 4. Open the agent and ask about earthquakes.
 
 ## Project structure
