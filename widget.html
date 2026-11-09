@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+:root{--fg:#0f172a;--mut:#64748b;--card:#f1f5f9;--line:#e2e8f0;--acc:#2563eb;--map:#eaf2fb;--grid:#c7d6ea}
+@media (prefers-color-scheme:dark){:root{--fg:#e5e7eb;--mut:#94a3b8;--card:#162033;--line:#26344d;--acc:#60a5fa;--map:#0f1b2e;--grid:#26385a}}
+*{box-sizing:border-box}
+body{margin:0;padding:12px;color:var(--fg);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:transparent}
+h2{margin:0;font-size:17px}.mut{color:var(--mut)}
+.top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.seg{display:flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+button{font:inherit;color:inherit;background:transparent;border:0;padding:6px 11px;cursor:pointer}
+.seg button.on,.chip.on{background:var(--acc);color:#fff}
+.stats{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.stat{background:var(--card);border-radius:10px;padding:6px 10px}.stat b{font-size:15px}
+.controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.controls label{display:flex;gap:8px;align-items:center}input[type=range]{accent-color:var(--acc);width:150px}
+input[type=text]{border:1px solid var(--line);background:var(--card);color:inherit;border-radius:8px;padding:6px 9px;min-width:150px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);border-radius:999px;display:flex;align-items:center;gap:6px;padding:4px 10px}
+.chip i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.map{background:var(--map);border-radius:12px;overflow:hidden;border:1px solid var(--line)}
+svg{display:block;width:100%;height:auto}.gl{stroke:var(--grid);stroke-width:.5}.eq{stroke-width:1}
+circle.q{cursor:pointer;fill-opacity:.62;stroke:#fff;stroke-width:.6}circle.q:hover{fill-opacity:.95}
+circle.sel{fill:none;stroke:var(--fg);stroke-width:2;pointer-events:none}
+.bottom{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+@media(max-width:560px){.bottom{grid-template-columns:1fr}}
+.card{background:var(--card);border-radius:12px;padding:10px 12px}
+.big{font-size:28px;font-weight:700}.row{display:flex;gap:8px;align-items:center;padding:6px 8px;border-radius:8px;cursor:pointer}
+.row:hover,.row.on{background:var(--card)}.badge{min-width:38px;text-align:center;color:#fff;border-radius:8px;padding:3px 0;font-weight:700}
+.row span.p{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acts{display:flex;gap:6px;margin-top:8px}.acts button{border:1px solid var(--line);border-radius:8px}
+.sortbar{display:flex;gap:4px;margin-bottom:4px}.sortbar button{padding:3px 8px;border-radius:8px}.sortbar button.on{background:var(--acc);color:#fff}
+.err{color:#dc2626;margin:6px 0}
+</style></head><body>
+<div class="top"><div><h2>Earthquake Explorer</h2><div id="sub" class="mut">Loading…</div></div><div class="seg" id="days"></div></div>
+<div class="stats" id="stats"></div>
+<div class="controls">
+  <label>Min magnitude <b id="magv">0</b><input type="range" id="mag" min="0" max="8" step="0.1" value="0"></label>
+  <div class="chips" id="depths"></div>
+  <input type="text" id="q" placeholder="Filter by place…">
+</div>
+<div id="err" class="err"></div>
+<div class="map" id="map"></div>
+<div class="bottom"><div class="card" id="detail"></div><div><div class="sortbar" id="sorts"></div><div id="list"></div></div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const W=720,H=360,COL={s:"#ef4444",m:"#f59e0b",d:"#3b82f6"};
+const dc=d=>d<70?"s":d<300?"m":"d";
+const S={data:null,minMag:0,depth:{s:true,m:true,d:true},q:"",sel:null,sort:"mag",all:false};
+const ago=t=>{const m=Math.round((Date.now()-t)/60000);return m<60?m+" min ago":m<1440?Math.round(m/60)+" h ago":Math.round(m/1440)+" d ago"};
+const save=()=>{try{window.openai?.setWidgetState?.({minMag:S.minMag,depth:S.depth,sel:S.sel,sort:S.sort,q:S.q})}catch(e){}};
+const visible=()=>(S.data?.events||[]).filter(e=>e.mag>=S.minMag&&S.depth[dc(e.depth)]&&(!S.q||e.place.toLowerCase().includes(S.q)));
+
+function setData(d){
+  S.data=d;const q=d.query||{};
+  if(S.minMag<(q.min_magnitude||0))S.minMag=q.min_magnitude||0;
+  const ev=d.events||[];
+  if(!ev.find(e=>e.id===S.sel))S.sel=ev.length?ev.reduce((a,b)=>b.mag>a.mag?b:a).id:null;
+  $("err").textContent=d.error||"";
+  renderControls();renderView();
+}
+function renderControls(){
+  const q=S.data?.query||{};
+  $("days").innerHTML=[1,7,30].map(d=>`<button data-days="${d}" class="${(q.days||7)===d?"on":""}">${d===1?"24h":d+"d"}</button>`).join("");
+  const m=$("mag");m.min=q.min_magnitude||0;m.max=Math.max(8,...(S.data?.events||[]).map(e=>Math.ceil(e.mag)));m.value=S.minMag;
+  $("depths").innerHTML=[["s","Shallow &lt;70 km"],["m","Mid 70–300"],["d","Deep &gt;300"]].map(([k,l])=>`<button data-depth="${k}" class="chip ${S.depth[k]?"on":""}"><i style="background:${COL[k]}"></i>${l}</button>`).join("");
+  $("q").value=S.q;
+}
+function renderView(){
+  const ev=visible(),all=S.data?.events||[],q=S.data?.query||{};
+  $("magv").textContent="M"+Number(S.minMag).toFixed(1)+"+";
+  $("sub").textContent=S.data?`${ev.length} of ${all.length} quakes · last ${q.days===1?"24 hours":q.days+" days"} · USGS${q.place?" · "+q.place:""}`:"Loading…";
+  const top=ev.length?ev.reduce((a,b)=>b.mag>a.mag?b:a):null,avg=ev.length?ev.reduce((s,e)=>s+e.depth,0)/ev.length:0;
+  $("stats").innerHTML=`<div class="stat">Shown <b>${ev.length}</b></div><div class="stat">Strongest <b>${top?"M"+top.mag:"–"}</b></div><div class="stat">Avg depth <b>${avg.toFixed(0)} km</b></div><div class="stat">M5+ <b>${ev.filter(e=>e.mag>=5).length}</b></div>`;
+  // map
+  let g="";
+  for(let lo=-180;lo<=180;lo+=30)g+=`<line class="gl" x1="${(lo+180)/360*W}" y1="0" x2="${(lo+180)/360*W}" y2="${H}"/>`;
+  for(let la=-90;la<=90;la+=30)g+=`<line class="gl ${la===0?"eq":""}" x1="0" y1="${(90-la)/180*H}" x2="${W}" y2="${(90-la)/180*H}"/>`;
+  let pts="",ring="";
+  [...ev].sort((a,b)=>a.mag-b.mag).forEach(e=>{
+    const x=(e.lon+180)/360*W,y=(90-e.lat)/180*H,r=Math.max(2.5,(e.mag-1)*2.3);
+    pts+=`<circle class="q" data-id="${esc(e.id)}" cx="${x}" cy="${y}" r="${r}" fill="${COL[dc(e.depth)]}"><title>M${e.mag} · ${esc(e.place)} · ${e.depth} km</title></circle>`;
+    if(e.id===S.sel)ring=`<circle class="sel" cx="${x}" cy="${y}" r="${r+4}"/>`;
+  });
+  $("map").innerHTML=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Earthquake map">${g}${pts}${ring}</svg>`;
+  // detail
+  const s=ev.find(e=>e.id===S.sel)||(S.data?.events||[]).find(e=>e.id===S.sel);
+  $("detail").innerHTML=s?`<div class="big" style="color:${COL[dc(s.depth)]}">M${s.mag}</div><div><b>${esc(s.place)}</b></div>
+    <div class="mut">${new Date(s.time).toLocaleString()} (${ago(s.time)})</div>
+    <div>Depth <b>${s.depth} km</b> (${{s:"shallow",m:"intermediate",d:"deep"}[dc(s.depth)]}) · ${s.lat}, ${s.lon}</div>
+    ${s.tsunami?'<div class="err">⚠ Tsunami flag set</div>':""}
+    <div class="acts"><button id="open" data-url="${esc(s.url)}">Open on USGS</button><button id="ask">Ask Athena</button></div>`
+    :'<div class="mut">Click a quake on the map or in the list.</div>';
+  // list
+  const key={mag:(a,b)=>b.mag-a.mag,time:(a,b)=>b.time-a.time,depth:(a,b)=>b.depth-a.depth}[S.sort];
+  const sorted=[...ev].sort(key),n=S.all?15:6;
+  $("sorts").innerHTML=[["mag","Strongest"],["time","Newest"],["depth","Deepest"]].map(([k,l])=>`<button data-sort="${k}" class="${S.sort===k?"on":""}">${l}</button>`).join("");
+  $("list").innerHTML=sorted.slice(0,n).map(e=>`<div class="row ${e.id===S.sel?"on":""}" data-id="${esc(e.id)}"><span class="badge" style="background:${COL[dc(e.depth)]}">${e.mag}</span><span class="p">${esc(e.place)}</span><span class="mut">${ago(e.time)}</span></div>`).join("")
+    +(sorted.length>6?`<button id="more" class="mut">${S.all?"Show less":"Show more"}</button>`:"")||'<div class="mut">No quakes match these filters.</div>';
+  save();try{window.openai?.notifyIntrinsicHeight?.(document.body.scrollHeight)}catch(e){}
+}
+async function reload(days){
+  const q=S.data?.query||{};$("sub").textContent="Loading…";$("err").textContent="";
+  try{
+    const res=await window.openai.callTool("search_earthquakes",{days,min_magnitude:q.min_magnitude??4,place:q.place||""});
+    const out=res?.structuredContent??res;
+    if(out?.events)setData(out);else $("err").textContent="No data returned.";
+  }catch(e){$("err").textContent="Could not reload: "+e.message;renderView()}
+}
+document.addEventListener("click",ev=>{
+  const t=ev.target.closest("[data-days],[data-depth],[data-id],[data-sort],#more,#open,#ask");if(!t)return;
+  if(t.dataset.days)return reload(+t.dataset.days);
+  if(t.dataset.depth){S.depth[t.dataset.depth]=!S.depth[t.dataset.depth];renderControls();}
+  else if(t.dataset.id)S.sel=t.dataset.id;
+  else if(t.dataset.sort)S.sort=t.dataset.sort;
+  else if(t.id==="more")S.all=!S.all;
+  else if(t.id==="open"){try{window.openai.openExternal({href:t.dataset.url})}catch(e){window.open(t.dataset.url,"_blank")}return}
+  else if(t.id==="ask"){const s=(S.data?.events||[]).find(e=>e.id===S.sel);if(s)window.openai?.sendFollowUpMessage?.({prompt:`Tell me about the M${s.mag} earthquake near ${s.place} and the tectonic setting.`});return}
+  renderView();
+});
+$("mag").addEventListener("input",e=>{S.minMag=+e.target.value;renderView()});
+$("q").addEventListener("input",e=>{S.q=e.target.value.trim().toLowerCase();renderView()});
+window.addEventListener("openai:set_globals",e=>{const o=e.detail?.globals?.toolOutput;if(o?.events)setData(o)});
+const ws=window.openai?.widgetState;if(ws)Object.assign(S,{minMag:ws.minMag??0,depth:ws.depth??S.depth,sel:ws.sel??null,sort:ws.sort??"mag",q:ws.q??""});
+const out=window.openai?.toolOutput;if(out?.events)setData(out);else renderView();
+</script></body></html>
